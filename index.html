@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time GPS Tracking</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            max-width: 300px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .offline {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .data-row {
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .data-label {
+            font-weight: bold;
+        }
+        .last-update {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 10px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="info-panel">
+        <h2><i class="fas fa-map-marker-alt"></i> GPS Tracker</h2>
+        <div class="data-row">
+            <span class="data-label">Device:</span>
+            <span id="device-id">myRaspberryPi</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">Latitude:</span>
+            <span id="latitude">--</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">Longitude:</span>
+            <span id="longitude">--</span>
+        </div>
+        <div class="data-row">
+            <span class="data-label">Speed:</span>
+            <span id="speed">--</span> knots
+        </div>
+        <div class="data-row">
+            <span class="data-label">Satellites:</span>
+            <span id="satellites">--</span>
+        </div>
+        <div id="status" class="status offline">OFFLINE</div>
+        <div id="last-update" class="last-update">Last update: never</div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-database-compat.js"></script>
+    
+    <script>
+        // Your Firebase configuration - REPLACE WITH YOUR ACTUAL CONFIG
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "gps-tracking-3eb60.firebaseapp.com",
+            databaseURL: "https://gps-tracking-3eb60-default-rtdb.firebaseio.com",
+            projectId: "gps-tracking-3eb60",
+            storageBucket: "gps-tracking-3eb60.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        const app = firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        // Map initialization
+        const map = L.map('map').setView([0, 0], 2);
+        
+        // Add tile layer (OpenStreetMap)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        
+        // Create a custom icon
+        const deviceIcon = L.icon({
+            iconUrl: 'https://cdn-icons-png.flaticon.com/512/149/149060.png',
+            iconSize: [32, 32],
+            iconAnchor: [16, 32],
+            popupAnchor: [0, -32]
+        });
+        
+        // Initialize marker with null position
+        let marker = L.marker([0, 0], {icon: deviceIcon}).addTo(map);
+        let circle = L.circle([0, 0], {radius: 0}).addTo(map);
+        
+        // Path line for tracking history
+        let pathPoints = [];
+        let pathLine = L.polyline([], {color: 'blue'}).addTo(map);
+        
+        // Reference to your Firebase data location
+        const deviceRef = database.ref('devices/myRaspberryPi');
+        
+        // Listen for data changes
+        deviceRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+            
+            if (data) {
+                // Update status
+                document.getElementById('status').className = 'status online';
+                document.getElementById('status').textContent = 'ONLINE';
+                
+                // Update info panel
+                document.getElementById('latitude').textContent = data.latitude ? data.latitude.toFixed(6) : '--';
+                document.getElementById('longitude').textContent = data.longitude ? data.longitude.toFixed(6) : '--';
+                document.getElementById('speed').textContent = data.speed_knots ? data.speed_knots.toFixed(2) : '--';
+                document.getElementById('satellites').textContent = data.num_satellites || '--';
+                
+                // Update last update time
+                const now = new Date();
+                document.getElementById('last-update').textContent = 
+                    `Last update: ${now.toLocaleTimeString()}`;
+                
+                // Update map if we have coordinates
+                if (data.latitude && data.longitude) {
+                    const newLatLng = [data.latitude, data.longitude];
+                    
+                    // Update marker position
+                    marker.setLatLng(newLatLng);
+                    
+                    // Add to path history
+                    pathPoints.push(newLatLng);
+                    pathLine.setLatLngs(pathPoints);
+                    
+                    // Add accuracy circle if available (example, you'd need to send accuracy from Pi)
+                    if (data.accuracy) {
+                        circle.setLatLng(newLatLng).setRadius(data.accuracy);
+                    }
+                    
+                    // Center map on new position (with slight offset to keep info panel visible)
+                    map.setView(newLatLng, 17, {animate: true, pan: {duration: 1}});
+                }
+            } else {
+                // No data available
+                document.getElementById('status').className = 'status offline';
+                document.getElementById('status').textContent = 'OFFLINE';
+            }
+        }, (error) => {
+            console.error("Firebase read failed:", error);
+            document.getElementById('status').className = 'status offline';
+            document.getElementById('status').textContent = 'ERROR CONNECTING';
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            map.invalidateSize();
+        });
+    </script>
+</body>
+</html>
